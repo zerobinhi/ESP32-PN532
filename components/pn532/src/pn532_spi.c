@@ -71,11 +71,13 @@ esp_err_t pn532_spi_write_command(pn532_t *pn532, uint8_t *cmd, uint8_t cmd_len)
 
     uint8_t checksum = PN532_HOSTTOPN532;
     for (uint8_t i = 0; i < cmd_len; i++)
+    {
         checksum += cmd[i];
+    }
     frame[6 + cmd_len] = (uint8_t)(~checksum + 1);
     frame[7 + cmd_len] = PN532_POSTAMBLE;
 
-#ifdef PN532_DEBUG1
+#ifdef PN532_DEBUG
     ESP_LOG_BUFFER_HEX(TAG, frame, sizeof(frame));
 #endif
 
@@ -85,6 +87,7 @@ esp_err_t pn532_spi_write_command(pn532_t *pn532, uint8_t *cmd, uint8_t cmd_len)
         return ESP_FAIL;
     }
 
+    // Send the command via SPI
     esp_err_t ret = _spi_write_data(pn532, 0x01, frame, sizeof(frame));
 
     xSemaphoreGive(pn532->mutex);

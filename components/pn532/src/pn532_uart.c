@@ -5,88 +5,61 @@
 
 // Logger tag for debugging
 static const char *TAG = "pn532_uart";
-
-/**
- * @brief Write a command to the PN532 over UART
- *
- * This function constructs a valid PN532 command frame and sends it via UART.
- *
- * @param[in] pn532 Pointer to the PN532 structure
- * @param[in] command Command data buffer
- * @param[in] command_len Length of the command data
- * @return ESP_OK on success, ESP_FAIL on error
- */
-static esp_err_t pn532_uart_write_command(pn532_t *pn532, uint8_t *command, uint8_t command_len)
+// Write a command to the PN532 via UART
+static esp_err_t pn532_uart_write_command(pn532_t *pn532, uint8_t *cmd, uint8_t cmd_len)
 {
-    // Clear the UART RX buffer
+    if (!cmd || cmd_len == 0)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
     uart_flush(pn532->handle.uart.port);
 
-    uint8_t data_len = command_len + 1;
-    uint8_t cmd[data_len + 7];
+    uint8_t data_len = cmd_len + 1;
+    uint8_t frame[data_len + 7]; // PREAMBLE ~ POSTAMBLE
 
-    // Construct the command frame
-    cmd[0] = PN532_PREAMBLE;
-    cmd[1] = PN532_STARTCODE1;
-    cmd[2] = PN532_STARTCODE2;
-    cmd[3] = data_len;
-    cmd[4] = ~data_len + 1;
-    cmd[5] = PN532_HOSTTOPN532;
+    // Build the command frame
+    frame[0] = PN532_PREAMBLE;
+    frame[1] = PN532_STARTCODE1;
+    frame[2] = PN532_STARTCODE2;
 
-    for (uint8_t i = 0; i < command_len; i++)
-    {
-        cmd[6 + i] = command[i];
-    }
+    frame[3] = data_len;
+    frame[4] = (uint8_t)(~data_len + 1);
+
+    frame[5] = PN532_HOSTTOPN532;
+
+    memcpy(&frame[6], cmd, cmd_len);
 
     uint8_t checksum = PN532_HOSTTOPN532;
-    for (uint8_t i = 0; i < command_len; i++)
+    for (uint8_t i = 0; i < cmd_len; i++)
     {
-        checksum += command[i];
+        checksum += cmd[i];
     }
-    checksum = ~checksum + 1;
-
-    cmd[6 + command_len] = checksum;
-    cmd[7 + command_len] = PN532_POSTAMBLE;
+    frame[6 + cmd_len] = (uint8_t)(~checksum + 1);
+    frame[7 + cmd_len] = PN532_POSTAMBLE;
 
 #ifdef PN532_DEBUG
-    ESP_LOGI(TAG, "writing command:");
-    ESP_LOG_BUFFER_HEX(TAG, cmd, sizeof(cmd));
+    ESP_LOG_BUFFER_HEX(TAG, frame, sizeof(frame));
 #endif
 
-    // Acquire mutex for thread-safe UART operation
     if (xSemaphoreTake(pn532->mutex, pdMS_TO_TICKS(1000)) != pdTRUE)
     {
         ESP_LOGE(TAG, "Failed to acquire mutex");
         return ESP_FAIL;
     }
 
-    vTaskDelay(PN532_DELAY_DEFAULT);
-
-    // Send the command frame via UART
-    int len = uart_write_bytes(pn532->handle.uart.port, (const char *)cmd, sizeof(cmd));
-
-    if (len != sizeof(cmd))
-    {
-        ESP_LOGE(TAG, "Failed to write command");
-        xSemaphoreGive(pn532->mutex);
-        return ESP_FAIL;
-    }
+    int len = uart_write_bytes(pn532->handle.uart.port, (const char *)frame, sizeof(frame));
 
     xSemaphoreGive(pn532->mutex);
-    return ESP_OK;
-}
 
-/**
- * @brief Read a response from the PN532 over UART
- *
- * This function reads the response frame from the PN532.
- *
- * @param[in] pn532 Pointer to the PN532 structure
- * @param[out] response Buffer to store the response data
- * @param[in] response_len Length of the response buffer
- * @return ESP_OK on success, ESP_FAIL on error
- */
+    return (len == sizeof(frame)) ? ESP_OK : ESP_FAIL;
+}
+// Read a response from the PN532 via UART
 static esp_err_t pn532_uart_read_response(pn532_t *pn532, uint8_t *response, uint8_t response_len)
 {
+    if (!response || response_len == 0)
+        return ESP_ERR_INVALID_ARG;
+
     if (xSemaphoreTake(pn532->mutex, pdMS_TO_TICKS(1000)) != pdTRUE)
     {
         ESP_LOGE(TAG, "Failed to acquire mutex");
@@ -95,22 +68,17 @@ static esp_err_t pn532_uart_read_response(pn532_t *pn532, uint8_t *response, uin
 
     vTaskDelay(PN532_DELAY_DEFAULT);
 
-    // Read response from UART
     int len = uart_read_bytes(pn532->handle.uart.port, response, response_len, PN532_DELAY_DEFAULT);
 
-    if (len < 0)
-    {
-        ESP_LOGE(TAG, "Failed to read response");
-        xSemaphoreGive(pn532->mutex);
+    xSemaphoreGive(pn532->mutex);
+
+    if (len <= 0)
         return ESP_FAIL;
-    }
 
 #ifdef PN532_DEBUG
-    ESP_LOGI(TAG, "reading response:");
-    ESP_LOG_BUFFER_HEX(TAG, response, response_len);
+    ESP_LOG_BUFFER_HEX(TAG, response, len);
 #endif
 
-    xSemaphoreGive(pn532->mutex);
     return ESP_OK;
 }
 

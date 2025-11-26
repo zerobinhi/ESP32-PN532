@@ -7,34 +7,38 @@
 static const char *TAG = "pn532_i2c";
 
 // Write a command to the PN532 via I2C
-static esp_err_t pn532_i2c_write_command(pn532_t *pn532, uint8_t *command, uint8_t command_len)
+static esp_err_t pn532_i2c_write_command(pn532_t *pn532, uint8_t *cmd, uint8_t cmd_len)
 {
-    uint8_t data_len = command_len + 1; // Include TFI in the length
-    uint8_t cmd[data_len + 7];         // Allocate memory for the full frame
+    if (!cmd || cmd_len == 0)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    uint8_t data_len = cmd_len + 1; // Include TFI in the length
+    uint8_t frame[data_len + 7];    // Allocate memory for the full frame
 
     // Build the command frame
-    cmd[0] = PN532_PREAMBLE;
-    cmd[1] = PN532_STARTCODE1;
-    cmd[2] = PN532_STARTCODE2;
-    cmd[3] = data_len;
-    cmd[4] = ~data_len + 1; // Checksum of the length
-    cmd[5] = PN532_HOSTTOPN532;
+    frame[0] = PN532_PREAMBLE;
+    frame[1] = PN532_STARTCODE1;
+    frame[2] = PN532_STARTCODE2;
+    frame[3] = data_len;
+    frame[4] = (uint8_t)(~data_len + 1); // Checksum of the length
+    frame[5] = PN532_HOSTTOPN532;
 
-    memcpy(&cmd[6], command, command_len); // Copy command data
+    memcpy(&frame[6], cmd, cmd_len); // Copy command data
 
-    // Calculate checksum
+    // Calculate checksum (DCS)
     uint8_t checksum = PN532_HOSTTOPN532;
-    for (uint8_t i = 0; i < command_len; i++)
+    for (uint8_t i = 0; i < cmd_len; i++)
     {
-        checksum += command[i];
+        checksum += cmd[i];
     }
-    checksum = ~checksum + 1;
-    cmd[6 + command_len] = checksum;
-    cmd[7 + command_len] = PN532_POSTAMBLE;
+
+    frame[6 + cmd_len] = (uint8_t)(~checksum + 1);
+    frame[7 + cmd_len] = PN532_POSTAMBLE;
 
 #ifdef PN532_DEBUG
-    ESP_LOGI(TAG, "writing command:");
-    ESP_LOG_BUFFER_HEX(TAG, cmd, sizeof(cmd));
+    ESP_LOG_BUFFER_HEX(TAG, frame, sizeof(frame));
 #endif
 
     if (xSemaphoreTake(pn532->mutex, pdMS_TO_TICKS(1000)) != pdTRUE)
@@ -43,24 +47,22 @@ static esp_err_t pn532_i2c_write_command(pn532_t *pn532, uint8_t *command, uint8
         return ESP_FAIL;
     }
 
-    vTaskDelay(PN532_DELAY_DEFAULT);
-
     // Send the command via I2C
-    esp_err_t err = i2c_master_transmit(pn532->handle.i2c.dev, cmd, sizeof(cmd), PN532_DELAY_DEFAULT);
-    if (err != ESP_OK)
-    {
-        ESP_LOGE(TAG, "Failed to write command");
-        xSemaphoreGive(pn532->mutex);
-        return ESP_FAIL;
-    }
+    esp_err_t ret = i2c_master_transmit(pn532->handle.i2c.dev, frame, sizeof(frame), PN532_DELAY_DEFAULT);
 
     xSemaphoreGive(pn532->mutex);
-    return ESP_OK;
+
+    return ret;
 }
 
 // Read a response from the PN532 via I2C
-static esp_err_t pn532_i2c_read_response(pn532_t *pn532, uint8_t *response, uint8_t response_len)
+static esp_err_t pn532_i2c_read_response(pn532_t *pn532, uint8_t *buf, uint8_t len)
 {
+    if (!buf || len == 0)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
     if (xSemaphoreTake(pn532->mutex, pdMS_TO_TICKS(1000)) != pdTRUE)
     {
         ESP_LOGE(TAG, "Failed to take mutex");
@@ -69,30 +71,54 @@ static esp_err_t pn532_i2c_read_response(pn532_t *pn532, uint8_t *response, uint
 
     vTaskDelay(PN532_DELAY_DEFAULT);
 
-    // look up PN532_datasheet.pdf page 42
-    uint8_t data[response_len + 1]; // Include header byte
-    esp_err_t err = i2c_master_receive(pn532->handle.i2c.dev, data, response_len + 1, PN532_DELAY_DEFAULT);
+    esp_err_t ret;
+    uint8_t status = 0;
 
-    if (data[0] != 0x01)
-    { // Ensure the first byte indicates success
-        err = ESP_FAIL;
+    // Read status (wait for ready)
+    for (int i = 0; i < 20; i++)
+    {
+        ret = i2c_master_receive(pn532->handle.i2c.dev, &status, 1, PN532_DELAY_DEFAULT);
+
+        if (ret == ESP_OK && status == 0x01)
+        {
+            break;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(5));
     }
 
-    memcpy(response, &data[1], response_len); // Copy the actual response
-
-    if (err != ESP_OK)
+    if (status != 0x01)
     {
-        ESP_LOGE(TAG, "Failed to read response");
         xSemaphoreGive(pn532->mutex);
+        ESP_LOGE(TAG, "PN532 not ready");
         return ESP_FAIL;
     }
 
-#ifdef PN532_DEBUG
-    ESP_LOGI(TAG, "reading response:");
-    ESP_LOG_BUFFER_HEX(TAG, response, response_len);
-#endif
+    // Read header byte + payload
+    uint8_t tmp[len + 1];
+
+    ret = i2c_master_receive(pn532->handle.i2c.dev, tmp, len + 1, PN532_DELAY_DEFAULT);
 
     xSemaphoreGive(pn532->mutex);
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "I2C read failed");
+        return ret;
+    }
+
+    if (tmp[0] != 0x01)
+    {
+        ESP_LOGE(TAG, "Invalid PN532 I2C header: 0x%02X", tmp[0]);
+        return ESP_FAIL;
+    }
+
+    memcpy(buf, &tmp[1], len);
+
+#ifdef PN532_DEBUG
+    ESP_LOG_BUFFER_HEX(TAG, buf, len);
+#endif
+
     return ESP_OK;
 }
 

@@ -102,15 +102,15 @@ void app_main()
     pn532_config_t pn532_config = {0};
 
     // Configure the PN532 based on the selected protocol
-#if 0
+#if 1
     pn532_config.protocol = PN532_UART_PROTOCOL;
     pn532_config.uart.rst_pin = UART_RST_PIN;
     pn532_config.uart.irq_pin = UART_IRQ_PIN;
     pn532_config.uart.tx_pin = UART_TX_PIN;
     pn532_config.uart.rx_pin = UART_RX_PIN;
-    pn532_config.uart.port = UART_PORT;
+    pn532_config.uart.port = UART_PORT;                                                               
     pn532_config.uart.baud_rate = UART_BAUD_RATE;
-#elif 0
+#elif 1                                                                   
     pn532_config.protocol = PN532_I2C_PROTOCOL;
     pn532_config.i2c.clk_speed = I2C_CLK_SPEED;
     pn532_config.i2c.port = I2C_PORT;

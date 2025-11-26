@@ -77,8 +77,8 @@ esp_err_t pn532_start(pn532_handle_t pn532_handle)
         pn532->write_command(pn532, cmd, sizeof(cmd));
         vTaskDelay(PN532_DELAY_DEFAULT);
     }
+    
     // Send a dummy command for synchronization, look up PN532_datasheet.pdf page 99
-
     esp_err_t err = pn532_send_command_check_ack(pn532, (uint8_t[]){PN532_WAKEUP}, 1);
     err = pn532_send_command_check_ack(pn532, (uint8_t[]){PN532_WAKEUP}, 1);
     if (err != ESP_OK)
@@ -96,11 +96,8 @@ esp_err_t pn532_send_command_check_ack(pn532_handle_t pn532_handle, uint8_t *com
     }
 
     pn532_t *pn532 = (pn532_t *)pn532_handle;
-
-#ifdef PN532_DEBUG1
-    ESP_LOGI(TAG, "writing command:");
-    ESP_LOG_BUFFER_HEX(TAG, command, command_len);
-#endif
+    uint8_t response[sizeof(pn532_ack)] = {0};
+    uint8_t len = sizeof(pn532_ack);
 
     esp_err_t err = pn532->write_command(pn532, command, command_len);
 
@@ -109,15 +106,7 @@ esp_err_t pn532_send_command_check_ack(pn532_handle_t pn532_handle, uint8_t *com
         return err;
     }
 
-    uint8_t response[sizeof(pn532_ack)] = {0};
-    uint8_t len = sizeof(response);
-
     err = pn532->read_response(pn532, response, len);
-
-#ifdef PN532_DEBUG1
-    ESP_LOGI(TAG, "reading response:");
-    ESP_LOG_BUFFER_HEX(TAG, response, len);
-#endif
 
     if (err != ESP_OK)
     {

@@ -13,7 +13,6 @@
 #include "freertos/semphr.h"
 
 #define PN532_DEBUG
-// #define PN532_DEBUG1
 
 #define PN532_I2C_ADDRESS ((uint8_t)0x24)
 
