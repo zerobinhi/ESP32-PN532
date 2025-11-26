@@ -1,9 +1,21 @@
 #pragma once
 
+#include <string.h>
+#include "esp_log.h"
 #include <esp_err.h>
-
 #include <driver/gpio.h>
 #include <driver/uart.h>
+#include <driver/spi_master.h>
+#include "driver/i2c_master.h"
+#include "freertos/task.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/semphr.h"
+
+#define PN532_DEBUG
+// #define PN532_DEBUG1
+
+#define PN532_I2C_ADDRESS ((uint8_t)0x24)
 
 #define PN532_PREAMBLE 0x00
 #define PN532_STARTCODE1 0x00
@@ -49,55 +61,71 @@
 
 /**
  * @brief PN532 protocol type
- * 
+ *
  */
-typedef enum {
+typedef enum
+{
     PN532_UART_PROTOCOL,
     PN532_I2C_PROTOCOL,
     PN532_SPI_PROTOCOL,
-    PN532_MAX_PROTOCOL,
 } pn532_protocol_t;
 
 /**
  * @brief PN532 handle type
- * 
+ *
  */
-typedef struct pn532_t* pn532_handle_t;
+typedef struct pn532_t *pn532_handle_t;
 
 /**
- * @brief PN532 uart configuration
- * 
+ * @brief PN532 UART configuration
  */
-typedef struct {
-    gpio_num_t tx; // UART TX pin
-    gpio_num_t rx; // UART RX pin
-    uart_port_t uart_port; // UART port number. UART_NUM_0 ~ (UART_NUM_MAX - 1)
-    uint32_t baud_rate; // UART baud rate
+typedef struct
+{
+    uart_port_t port;   // UART port number
+    gpio_num_t tx_pin;  // TX pin
+    gpio_num_t rx_pin;  // RX pin
+    gpio_num_t rst_pin; // Reset pin
+    gpio_num_t irq_pin; // Interrupt pin
+    uint32_t baud_rate; // Baud rate
 } pn532_uart_config_t;
 
 /**
- * @brief PN532 i2c configuration
- * 
+ * @brief PN532 I2C configuration
  */
-typedef struct {
-    // todo 
+typedef struct
+{
+    i2c_port_t port;       // I2C port number
+    gpio_num_t scl_pin;    // SCL pin
+    gpio_num_t sda_pin;    // SDA pin
+    gpio_num_t rst_pin;    // Reset pin
+    gpio_num_t irq_pin;    // Interrupt pin
+    uint32_t clk_speed;    // I2C speed
 } pn532_i2c_config_t;
 
 /**
- * @brief PN532 spi configuration
- * 
+ * @brief PN532 SPI configuration
  */
-typedef struct {
-    // todo
+typedef struct
+{
+    spi_host_device_t host; // SPI host (HSPI/VSPI)
+    gpio_num_t miso_pin;    // MISO
+    gpio_num_t mosi_pin;    // MOSI
+    gpio_num_t sclk_pin;    // CLK
+    gpio_num_t cs_pin;      // CS
+    gpio_num_t rst_pin;     // Reset pin
+    gpio_num_t irq_pin;     // Interrupt pin
+    uint32_t clk_speed;     // SPI speed
 } pn532_spi_config_t;
-
 /**
  * @brief PN532 configuration
- * 
+ *
  */
-typedef struct {
+typedef struct
+{
     pn532_protocol_t protocol;
-    union {
+    // 同一时间只能存储一个配置
+    union
+    {
         pn532_uart_config_t uart;
         pn532_i2c_config_t i2c;
         pn532_spi_config_t spi;
@@ -106,29 +134,29 @@ typedef struct {
 
 /**
  * @brief Initialize PN532 device.
- * 
+ *
  * Sets up the PN532 device with the given configuration.
  * (UART, I2C, or SPI) ** Only UART is implemented **
- * 
+ *
  * @param[out] pn532_handle Pointer to the PN532 handle.
  * @param[in] config Configuration settings for the PN532 device.
- * 
- * @return 
+ *
+ * @return
  *  - ESP_OK on success.
  *  - ESP_ERR_INVALID_ARG if the configuration is invalid.
  *  - ESP_ERR_NO_MEM if memory allocation failed.
  *  - Other error codes from the protocol-specific initialization functions.
  */
-esp_err_t pn532_init(pn532_handle_t* pn532_handle, const pn532_config_t* config);
+esp_err_t pn532_init(pn532_handle_t pn532_handle, const pn532_config_t *config);
 
 /**
  * @brief Free PN532 device.
- * 
+ *
  * Frees the resources used by the PN532 device.
- * 
+ *
  * @param[in] pn532_handle PN532 handle.
- * 
- * @return 
+ *
+ * @return
  *  - ESP_OK on success.
  *  - ESP_ERR_INVALID_ARG if the handle is invalid.
  *  - Other error codes from the protocol-specific free function.
@@ -137,11 +165,11 @@ esp_err_t pn532_free(pn532_handle_t pn532_handle);
 
 /**
  * @brief Start PN532 device.
- * 
+ *
  * Sends a wakeup command to the PN532 and checks the acknowledgment.
- * 
+ *
  * @param[in] pn532_handle PN532 handle.
- * 
+ *
  * @return
  * - ESP_OK on success.
  * - ESP_ERR_INVALID_ARG if the handle is invalid.
@@ -151,44 +179,43 @@ esp_err_t pn532_start(pn532_handle_t pn532_handle);
 
 /**
  * @brief Send command to PN532 and check acknowledgment.
- * 
+ *
  * Writes a command to the PN532 and checks the acknowledgment.
- * 
+ *
  * @param[in] pn532_handle PN532 handle.
  * @param[in] command Pointer to the command buffer.
  * @param[in] command_len Length of the command buffer.
- * @param[in] timeout Timeout in milliseconds.
- * 
+ *
  * @return
  * - ESP_OK on success.
  * - ESP_ERR_INVALID_ARG if the handle or command is invalid.
  * - ESP_ERR_INVALID_RESPONSE if the acknowledgment is invalid.
  * - Other error codes from write and read functions.
  */
-esp_err_t pn532_send_command_check_ack(pn532_handle_t pn532_handle, uint8_t* command, uint8_t command_len, uint32_t timeout);
+esp_err_t pn532_send_command_check_ack(pn532_handle_t pn532_handle, uint8_t *command, uint8_t command_len);
 
 /**
  * @brief Get PN532 firmware version.
- * 
+ *
  * Sends a firmware version request to the PN532 and reads the version information.
- * 
+ *
  * @param[in] pn532_handle PN532 handle.
  * @param[out] version Pointer to the version buffer (buffer MUST have atleast 4 bytes).
- * 
+ *
  * @return
  * - ESP_OK on success.
  * - ESP_ERR_INVALID_ARG if the handle or version is invalid.
  * - ESP_ERR_INVALID_RESPONSE if the firmware version check or ackowledgment failed.
  */
-esp_err_t pn532_get_firmware_version(pn532_handle_t pn532_handle, uint8_t* version);
+esp_err_t pn532_get_firmware_version(pn532_handle_t pn532_handle, uint8_t *version);
 
 /**
  * @brief Configure PN532 in SAM (Security Access Module) mode.
- * 
+ *
  * Configures the PN532 in SAM mode with IRQ and a timeout of 1s.
- * 
+ *
  * @param[in] pn532_handle PN532 handle.
- * 
+ *
  * @return
  * - ESP_OK on success.
  * - ESP_ERR_INVALID_ARG if the handle is invalid.
@@ -198,12 +225,12 @@ esp_err_t pn532_SAM_configuration(pn532_handle_t pn532_handle);
 
 /**
  * @brief Set passive activation retries.
- * 
+ *
  * Sets the maximum number of retries for passive target activation. 0X00 means only one try, no retries. 0xFF means infinite retries.
- * 
+ *
  * @param[in] pn532_handle PN532 handle.
  * @param[in] max_retries Maximum number of retries.
- * 
+ *
  * @return
  * - ESP_OK on success.
  * - ESP_ERR_INVALID_ARG if the handle is invalid.
@@ -213,34 +240,34 @@ esp_err_t pn532_set_passive_activation_retries(pn532_handle_t pn532_handle, uint
 
 /**
  * @brief Read UID of passive target.
- * 
+ *
  * Detects a passive target and reads its UID
- * 
+ *
  * @param[in] pn532_handle PN532 handle.
  * @param[in] card_baud_rate Baud rate of the card (e.g., ISO14443A).
  * @param[out] uid Buffer to store the UID.
  * @param[out] uid_len Pointer to the UID length.
- * 
+ *
  * @return
  * - ESP_OK on success.
  * - ESP_ERR_INVALID_ARG if the handle or UID buffer is invalid.
  * - ESP_ERR_INVALID_RESPONSE if target detection or acknowledgment failed.
  * - ESP_ERR_NOT_FOUND if no target was found.
  */
-esp_err_t pn532_read_passive_target_id(pn532_handle_t pn532_handle, uint8_t card_baud_rate, uint8_t* uid, size_t* uid_len);
+esp_err_t pn532_read_passive_target_id(pn532_handle_t pn532_handle, uint8_t card_baud_rate, uint8_t *uid, uint8_t *uid_len);
 
 /**
  * @brief Read GPIO state.
- * 
+ *
  * Reads the state of the GPIO pins P3, P7, and I0.
  * Buffer[0] = P3, Buffer[1] = P7, Buffer[2] = I0.
- * 
+ *
  * @param[in] pn532_handle PN532 handle.
  * @param[out] gpio_state Buffer to store the GPIO state (Buffer must have atleast 3 bytes).
- * 
+ *
  * @return
  * - ESP_OK on success.
  * - ESP_ERR_INVALID_ARG if the handle or GPIO state buffer is invalid.
  * - ESP_ERR_INVALID_RESPONSE if the command check or ackowledgment failed.
  */
-esp_err_t pn532_read_gpio(pn532_handle_t pn532_handle, uint8_t* gpio_state);
+esp_err_t pn532_read_gpio(pn532_handle_t pn532_handle, uint8_t *gpio_state);
